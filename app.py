@@ -18,37 +18,57 @@ if page == "🐱 貓咪需求計算":
 
     # ➤ 基本輸入
     weight = st.number_input("體重 (kg)", min_value=0.1, step=0.1, value=4.0)
-    age_group = st.selectbox("年齡層", ["成貓", "幼貓 <4月", "幼貓 4-6月", "老貓 / 減重"])
+    age_group = st.selectbox("年齡層", ["幼貓 0-4月", "幼貓 4-6月", "結紮成貓","未結紮成貓", "老貓", "減重"])
     activity = st.selectbox("活動量", ["低", "中", "高"])
-    neutered = st.checkbox("已結紮？", value=True)
 
     # ➤ 係數選擇（簡化範例，可再細分）
-    factor_map = {
-        "成貓": 1.2 if neutered else 1.4,
-        "幼貓 <4月": 3.0,
+
+    # --- 生理係數（年齡/結紮）
+    phys_factor_map = {
+        "幼貓 0-4月": 3.0,
         "幼貓 4-6月": 2.5,
-        "老貓 / 減重": 1.0,
+        "未結紮成貓": 1.5,
+        "結紮成貓": 1.3,
+        "老貓": 1.0,
+        "減重": 0.8,
     }
-    mer_factor = factor_map[age_group]
+
+    # --- 活動量係數
+    activity_factor_map = {
+        "低": 1.0,
+        "中": 1.2,
+        "高": 1.4,
+    }
+
+    phys_mer_factor = phys_factor_map[age_group]
+    act_factor   = activity_factor_map[activity]
 
     # ➤ 熱量計算
     rer = 70 * (weight ** 0.75)
-    mer = rer * mer_factor
+    mer = rer * phys_mer_factor * act_factor
 
     # ➤ 最低營養素（以 g/day 顯示）
-    min_protein_g = 5.0 * weight   # 5 g/kg
-    min_fat_g     = 2.0 * weight   # 2 g/kg
+    min_protein_g = mer / 1000 * 65      # g/day
+    min_fat_g     = mer / 1000 * 22.5    # g/day
+
+    # ➤ 建議營養素（以 g/day 顯示）
+    recommend_protein_g = min_protein_g * 1.15      # g/day
+    recommend_fat_g     = min_fat_g * 1.15    # g/day
 
     st.subheader("📊 計算結果")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("RER", f"{rer:.0f} kcal / 天")
         st.metric("MER (建議攝取)", f"{mer:.0f} kcal / 天", help="基於年齡/結紮狀態係數")
     with col2:
-        st.write("### 最低營養素 (NRC 成貓維持)")
+        st.write("最低營養素")
         st.write(f"蛋白質 ≥ **{min_protein_g:.1f} g / 天**")
         st.write(f"脂肪   ≥ **{min_fat_g:.1f} g / 天**")
         st.caption("※ 若處方或特殊需求，可再手動調整目標值。")
+    with col3:
+        st.write("建議營養素")
+        st.write(f"蛋白質 **{recommend_protein_g:.1f} g / 天**")
+        st.write(f"脂肪   **{recommend_fat_g:.1f} g / 天**")
 
 # --- 2B. 既有食物 DMB 分析頁 ----
 elif page == "🥣 食物分析 (DMB)":
