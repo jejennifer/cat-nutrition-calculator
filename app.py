@@ -73,7 +73,7 @@ if page == "🐱 貓咪需求計算":
 # --- 2B. 既有食物 DMB 分析頁 ----
 elif page == "🥣 食物分析 (DMB)":
     st.title("🥣 食物營養分析（轉乾物基準）")
-    df = pd.read_csv("data/food_data.csv")
+    df = pd.read_csv("data/food_data_test.csv")
     selected = st.multiselect("請選擇食物（可複選）", df["食物名稱"].tolist())
     if selected:
         st.subheader("分析結果")
