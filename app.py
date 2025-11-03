@@ -98,8 +98,8 @@ def clean_fresh(df_raw: pd.DataFrame) -> pd.DataFrame:
     return df[["食物名稱", "類型", "水分", "蛋白質", "脂肪", "碳水", "kcal_per_g"]]
 
 # --- 匯入兩份資料 ---
-dry_path   = "data/food_data_dry_test.csv"
-fresh_path = "data/food_data_fresh_test.csv"
+dry_path   = "data/food_data_dry.csv"
+fresh_path = "data/food_data_fresh.csv"
 
 df_dry   = clean_dry(pd.read_csv(dry_path))
 df_fresh = clean_fresh(pd.read_csv(fresh_path))
