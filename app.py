@@ -304,3 +304,131 @@ if selected_fresh:
         with col_kcal:
             # total_kcal 已在上面彙總；若你想保險，也可用 df_serve["熱量(kcal)"].sum()
             st.metric("🔥 鮮食提供熱量", f"{total_kcal:.0f} kcal / 天")
+
+# --- 固定鮮食 + 計算所需雞蛋克數 ---------------------------------
+st.markdown("---")
+st.subheader("🥚 固定鮮食 + 計算所需雞蛋克數")
+
+# 乾糧貢獻（如果有選乾糧才會有 dry_df）
+if "dry_df" in locals() and not dry_df.empty:
+    dry_protein_total = float(dry_df["蛋白(g)"].sum())
+    dry_fat_total     = float(dry_df["脂肪(g)"].sum())
+    dry_carb_total    = float(dry_df["碳水(g)"].sum())
+    dry_kcal_total    = float(dry_df["提供熱量(kcal)"].sum())
+else:
+    dry_protein_total = dry_fat_total = dry_carb_total = dry_kcal_total = 0.0
+
+# 🔹 目標：整天（乾糧＋所有鮮食）要達到的營養量
+target_total_kcal = float(mer)
+target_protein_g  = float(recommend_protein_g)   # 之前算好的建議蛋白質（含 1.15 安全係數）
+target_fat_g      = float(recommend_fat_g)       # 之前算好的建議脂肪
+target_carb_g     = target_total_kcal * 0.125 / 4.0  # 12.5% 熱量來自碳水
+
+# 🔹 固定鮮食（不含雞蛋，由使用者輸入克數）
+fixed_candidates = fresh_candidates[fresh_candidates["食物名稱"] != "雞蛋"]
+selected_fixed = st.multiselect(
+    "選擇已確定克數的鮮食（不含雞蛋）",
+    fixed_candidates["食物名稱"].tolist(),
+    key="fixed_fresh"
+)
+
+fixed_rows = []
+fixed_prot = fixed_fat = fixed_carb = fixed_kcal = 0.0
+
+if selected_fixed:
+    st.caption("輸入目前已準備的每種食材克數，系統會幫你算出還需要補多少『雞蛋』。")
+    for name in selected_fixed:
+        row = fixed_candidates[fixed_candidates["食物名稱"] == name].iloc[0]
+        grams = st.number_input(
+            f"{name} 克數",
+            min_value=0.0,
+            step=1.0,
+            value=0.0,
+            key=f"fixed_{name}"
+        )
+        prot_g = grams * float(row["蛋白質"]) / 100.0
+        fat_g  = grams * float(row["脂肪"])   / 100.0
+        carb_g = grams * float(row["碳水"])   / 100.0
+        kcal   = grams * float(row["kcal_per_g"])
+
+        fixed_prot += prot_g
+        fixed_fat  += fat_g
+        fixed_carb += carb_g
+        fixed_kcal += kcal
+
+        fixed_rows.append({
+            "食材": name,
+            "克數(g)": round(grams, 1),
+            "蛋白(g)": round(prot_g, 1),
+            "脂肪(g)": round(fat_g, 1),
+            "碳水(g)": round(carb_g, 1),
+            "熱量(kcal)": round(kcal, 1),
+        })
+
+if fixed_rows:
+    st.dataframe(pd.DataFrame(fixed_rows), use_container_width=True)
+
+# 🔹 找出「雞蛋」的營養資料
+egg_row = fresh_candidates[fresh_candidates["食物名稱"] == "雞蛋"]
+if egg_row.empty:
+    st.warning("⚠️ 鮮食資料庫中找不到「雞蛋」這個食材，無法計算所需雞蛋克數。")
+else:
+    egg = egg_row.iloc[0]
+    egg_prot_per_g = float(egg["蛋白質"]) / 100.0
+    egg_fat_per_g  = float(egg["脂肪"])   / 100.0
+    egg_carb_per_g = float(egg["碳水"])  / 100.0
+    egg_kcal_per_g = float(egg["kcal_per_g"])
+
+    # 🔹 乾糧 + 固定鮮食 已經提供的總營養
+    base_prot = dry_protein_total + fixed_prot
+    base_fat  = dry_fat_total     + fixed_fat
+    base_carb = dry_carb_total    + fixed_carb
+    base_kcal = dry_kcal_total    + fixed_kcal
+
+    # 🔹 還需要補多少營養素（不足為 0，不會變成負值）
+    need_kcal = max(target_total_kcal - base_kcal, 0.0)
+    need_prot = max(target_protein_g - base_prot, 0.0)
+    need_fat  = max(target_fat_g     - base_fat, 0.0)
+    need_carb = max(target_carb_g    - base_carb, 0.0)
+
+    # 若完全不缺營養，就不必再加雞蛋
+    if need_kcal <= 0 and need_prot <= 0 and need_fat <= 0 and need_carb <= 0:
+        st.info("目前乾糧＋固定鮮食已經達到設定的熱量與營養目標，不一定需要再加雞蛋。")
+    else:
+        # 🔹 由「熱量 / 蛋白 / 脂肪 / 碳水」四個角度估算需要補多少克雞蛋
+        g_by_kcal = need_kcal / egg_kcal_per_g if egg_kcal_per_g > 0 else 0.0
+        g_by_prot = need_prot / egg_prot_per_g if egg_prot_per_g > 0 else 0.0
+        g_by_fat  = need_fat  / egg_fat_per_g  if egg_fat_per_g  > 0 else 0.0
+        g_by_carb = need_carb / egg_carb_per_g if egg_carb_per_g > 0 else 0.0
+
+        egg_grams = max(g_by_kcal, g_by_prot, g_by_fat, g_by_carb)
+
+        # 🔹 加上雞蛋後的總營養
+        total_prot = base_prot + egg_grams * egg_prot_per_g
+        total_fat  = base_fat  + egg_grams * egg_fat_per_g
+        total_carb = base_carb + egg_grams * egg_carb_per_g
+        total_kcal = base_kcal + egg_grams * egg_kcal_per_g
+
+        # 顯示結果
+        st.metric("🥚 建議雞蛋克數", f"{egg_grams:.0f} g / 天")
+
+        result_rows = fixed_rows.copy()
+        result_rows.append({
+            "食材": "雞蛋（計算得出）",
+            "克數(g)": round(egg_grams, 1),
+            "蛋白(g)": round(egg_grams * egg_prot_per_g, 1),
+            "脂肪(g)": round(egg_grams * egg_fat_per_g, 1),
+            "碳水(g)": round(egg_grams * egg_carb_per_g, 1),
+            "熱量(kcal)": round(egg_grams * egg_kcal_per_g, 1),
+        })
+        st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
+
+        # 🔹 最終整體營養比例（含乾糧＋固定鮮食＋雞蛋）
+        if total_kcal > 0:
+            final_prot_pct = total_prot * 4 / total_kcal * 100
+            final_fat_pct  = total_fat  * 9 / total_kcal * 100
+            final_carb_pct = total_carb * 4 / total_kcal * 100
+            st.caption(
+                f"整體營養比例（含乾糧＋所有鮮食）："
+                f"蛋白質 {final_prot_pct:.1f}%、脂肪 {final_fat_pct:.1f}%、碳水 {final_carb_pct:.1f}%"
+            )
