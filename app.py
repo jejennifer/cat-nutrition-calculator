@@ -101,8 +101,8 @@ def clean_fresh(df_raw: pd.DataFrame) -> pd.DataFrame:
 dry_path   = "data/food_data_dry_1115.csv"
 fresh_path = "data/food_data_fresh_1115.csv"
 
-df_dry   = clean_dry(pd.read_csv(dry_path))
-df_fresh = clean_fresh(pd.read_csv(fresh_path))
+df_dry   = clean_dry(pd.read_csv(dry_path)).dropna(subset=["食物名稱"])
+df_fresh = clean_fresh(pd.read_csv(fresh_path)).dropna(subset=["食物名稱"])
 
 df = pd.concat([df_dry, df_fresh], ignore_index=True)
 df["水分"] = df["水分"].clip(lower=0.0, upper=99.9)
