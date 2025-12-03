@@ -571,3 +571,102 @@ if selected_fixed_mode:
         st.metric("🍽️ 鮮食總克數（固定模式）", f"{(fixed_grams + total_other_g):.0f} g / 天")
     with col_kcal:
         st.metric("🔥 鮮食提供熱量（固定模式）", f"{total_kcal:.0f} kcal / 天")
+
+# --- 固定克數模式（使用者輸入多種食材克數 → 補足某一食材） ---
+st.markdown("---")
+st.subheader("🥚 固定克數模式：輸入已有食材克數，系統幫你算補足量")
+
+st.caption("選擇任意多種鮮食食材，輸入你手邊的克數，並選擇要用哪個補足剩餘營養與熱量。")
+
+fixed_candidates = df[df["類型"].str.contains("生", na=False)]
+selected_fixed = st.multiselect(
+    "選擇已有克數的食材（可複選）",
+    fixed_candidates["食物名稱"].tolist(),
+    key="fixed_sel"
+)
+
+fixed_input = {}
+if selected_fixed:
+    st.write("### 🥩 輸入手邊食材克數")
+    for name in selected_fixed:
+        grams = st.number_input(
+            f"{name}（g）",
+            min_value=0.0,
+            step=1.0,
+            value=0.0,
+            key=f"fixed_{name}"
+        )
+        fixed_input[name] = grams
+
+    # 👉 計算固定食材提供的營養與熱量
+    fixed_total_prot = fixed_total_fat = fixed_total_carb = fixed_total_kcal = 0.0
+
+    for name, grams in fixed_input.items():
+        row = fixed_candidates[fixed_candidates["食物名稱"] == name].iloc[0]
+
+        prot_g = grams * float(row["蛋白質"]) / 100.0
+        fat_g  = grams * float(row["脂肪"])   / 100.0
+        carb_g = grams * float(row["碳水"])   / 100.0
+        kcal   = grams * float(row["kcal_per_g"])
+
+        fixed_total_prot += prot_g
+        fixed_total_fat  += fat_g
+        fixed_total_carb += carb_g
+        fixed_total_kcal += kcal
+
+    st.write("### 📘 固定食材提供的營養")
+    st.write(f"- 蛋白質：**{fixed_total_prot:.1f} g**")
+    st.write(f"- 脂肪：**{fixed_total_fat:.1f} g**")
+    st.write(f"- 碳水：**{fixed_total_carb:.1f} g**")
+    st.write(f"- 熱量：**{fixed_total_kcal:.1f} kcal**")
+
+    # 👉 計算剩餘需求（扣除乾糧 + 固定食材）
+    remain_kcal = max(mer - dry_total_kcal - fixed_total_kcal, 0)
+    remain_prot = max(recommend_protein_g - dry_protein_total - fixed_total_prot, 0)
+    remain_fat  = max(recommend_fat_g     - dry_fat_total     - fixed_total_fat , 0)
+
+    st.write("### ⚖️ 仍需補足的每日營養")
+    colR1, colR2, colR3 = st.columns(3)
+    with colR1:
+        st.metric("需補熱量", f"{remain_kcal:.0f} kcal/天")
+    with colR2:
+        st.metric("需補蛋白質", f"{remain_prot:.1f} g/天")
+    with colR3:
+        st.metric("需補脂肪", f"{remain_fat:.1f} g/天")
+
+    # 👉 選擇補足用食材
+    st.write("### 🥚 選擇補足用的食材（例如蛋、雞胸…）")
+    balancer = st.selectbox(
+        "選擇用來補足剩餘營養的食材",
+        fixed_candidates["食物名稱"].tolist(),
+        key="balancer_sel"
+    )
+
+    if balancer:
+        row_b = fixed_candidates[fixed_candidates["食物名稱"] == balancer].iloc[0]
+
+        b_prot_pct = float(row_b["蛋白質"]) / 100.0
+        b_fat_pct  = float(row_b["脂肪"])   / 100.0
+        b_carb_pct = float(row_b["碳水"])   / 100.0
+        b_kcal_g   = float(row_b["kcal_per_g"])
+
+        # 三種需求換算成需要的克數
+        grams_by_kcal = remain_kcal / b_kcal_g if b_kcal_g > 0 else 0
+        grams_by_prot = remain_prot / b_prot_pct if b_prot_pct > 0 else 0
+        grams_by_fat  = remain_fat  / b_fat_pct  if b_fat_pct  > 0 else 0
+
+        # 取最大值 → 確保三種營養都補足
+        need_balancer_g = max(grams_by_kcal, grams_by_prot, grams_by_fat)
+
+        st.write("### 🧮 建議補足食材克數")
+        st.metric(f"{balancer} 建議用量", f"{need_balancer_g:.1f} g/天")
+
+        # 最終營養顯示
+        final_prot = fixed_total_prot + dry_protein_total + need_balancer_g * b_prot_pct
+        final_fat  = fixed_total_fat  + dry_fat_total     + need_balancer_g * b_fat_pct
+        final_kcal = fixed_total_kcal + dry_total_kcal    + need_balancer_g * b_kcal_g
+
+        st.write("### 📊 最終每日營養（乾糧 + 固定食材 + 補足食材）")
+        st.write(f"- 蛋白質：**{final_prot:.1f} g**")
+        st.write(f"- 脂肪：**{final_fat:.1f} g**")
+        st.write(f"- 熱量：**{final_kcal:.1f} kcal**")
