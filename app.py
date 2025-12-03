@@ -307,7 +307,7 @@ if selected_fresh:
 
 # --- 固定鮮食 + 計算所需雞蛋克數 ---------------------------------
 st.markdown("---")
-st.subheader("🥚 固定鮮食 + 計算所需雞蛋克數")
+st.subheader("輸入手邊食材品項及克數，我們自動計算額外所需的雞蛋🥚克數給你！")
 
 # 乾糧貢獻（如果有選乾糧才會有 dry_df）
 if "dry_df" in locals() and not dry_df.empty:
@@ -410,7 +410,7 @@ else:
         total_kcal = base_kcal + egg_grams * egg_kcal_per_g
 
         # 顯示結果
-        st.metric("🥚 建議雞蛋克數", f"{egg_grams:.0f} g / 天")
+        st.metric("🥚建議雞蛋克數", f"{egg_grams:.0f} g / 天")
 
         result_rows = fixed_rows.copy()
         result_rows.append({
