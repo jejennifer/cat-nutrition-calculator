@@ -432,3 +432,142 @@ else:
                 f"整體營養比例（含乾糧＋所有鮮食）："
                 f"蛋白質 {final_prot_pct:.1f}%、脂肪 {final_fat_pct:.1f}%、碳水 {final_carb_pct:.1f}%"
             )
+
+# --- 固定食材模式：使用者輸入某食材的克數，其他自動補齊 ---
+st.markdown("---")
+st.subheader("🥚 固定食材克數 → 自動補齊其他鮮食")
+
+fresh_candidates = df[df["類型"].str.contains("生", na=False)]
+selected_fixed_mode = st.multiselect(
+    "選擇要加入配方的食材（固定模式，可複選）",
+    fresh_candidates["食物名稱"].tolist(),
+)
+
+if selected_fixed_mode:
+
+    # 使用者選擇哪一個是「固定克數」的食材
+    fixed_item = st.selectbox("選擇要固定克數的食材", selected_fixed_mode)
+
+    fixed_grams = st.number_input(
+        f"{fixed_item} 固定克數",
+        min_value=0.0,
+        value=50.0,
+        step=1.0
+    )
+
+    # --- 營養素目標比例 ---
+    t_prot_per_kcal = 0.65 / 4.0     # g/kcal
+    t_fat_per_kcal  = 0.225 / 9.0
+    t_carb_per_kcal = 0.125 / 4.0
+
+    # --- 計算固定食材的營養 ---
+    row_f = fresh_candidates[fresh_candidates["食物名稱"] == fixed_item].iloc[0]
+    kcal_fixed = fixed_grams * float(row_f["kcal_per_g"])
+    prot_fixed = fixed_grams * float(row_f["蛋白質"]) / 100
+    fat_fixed  = fixed_grams * float(row_f["脂肪"])   / 100
+    carb_fixed = fixed_grams * float(row_f["碳水"])   / 100
+
+    # --- 根據乾糧與整體 MER 計算剩餘熱量 ---
+    rem_kcal_for_fresh = max(remaining_kcal - kcal_fixed, 0)
+
+    st.write(f"🔥 固定食材提供熱量：**{kcal_fixed:.1f} kcal**")
+    st.write(f"⚖️ 其他鮮食需補熱量：**{rem_kcal_for_fresh:.1f} kcal**")
+
+    # --- 計算其他食材的權重（沿用你現在的距離算法） ---
+    other_items = [x for x in selected_fixed_mode if x != fixed_item]
+
+    weights = []
+    for name in other_items:
+        row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
+        kcal_g = float(row["kcal_per_g"])
+
+        if kcal_g <= 0:
+            w = 1e-6
+        else:
+            ppk = (float(row["蛋白質"]) / 100) / kcal_g
+            fpk = (float(row["脂肪"]) / 100) / kcal_g
+            cpk = (float(row["碳水"]) / 100) / kcal_g
+
+            d = math.sqrt(
+                (ppk - t_prot_per_kcal)**2 +
+                (fpk - t_fat_per_kcal)**2 +
+                (cpk - t_carb_per_kcal)**2
+            )
+            w = 1.0 / (d + 1e-6)
+
+        weights.append((name, w))
+
+    sumw = sum(w for _, w in weights) if weights else 1.0
+
+    # --- 計算混合熱量密度 kcal/g ---
+    mix_kcal_per_g = 0
+    for name, w in weights:
+        frac = w / sumw
+        row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
+        mix_kcal_per_g += frac * float(row["kcal_per_g"])
+
+    total_other_g = rem_kcal_for_fresh / mix_kcal_per_g if mix_kcal_per_g > 0 else 0
+
+    # --- 分配克數 ---
+    serve_rows = []
+
+    # 先放固定項目
+    serve_rows.append({
+        "食材": fixed_item,
+        "建議克數(g)": round(fixed_grams, 1),
+        "蛋白(g)": round(prot_fixed, 1),
+        "脂肪(g)": round(fat_fixed, 1),
+        "碳水(g)": round(carb_fixed, 1),
+        "熱量(kcal)": round(kcal_fixed, 1),
+        "固定?": "✔"
+    })
+
+    # 其他自動生成
+    total_prot = prot_fixed
+    total_fat = fat_fixed
+    total_carb = carb_fixed
+    total_kcal = kcal_fixed
+
+    for name, w in weights:
+        frac = w / sumw
+        grams = total_other_g * frac
+        row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
+
+        prot_g = grams * float(row["蛋白質"]) / 100
+        fat_g  = grams * float(row["脂肪"])   / 100
+        carb_g = grams * float(row["碳水"])   / 100
+        kcal_g = grams * float(row["kcal_per_g"])
+
+        total_prot += prot_g
+        total_fat  += fat_g
+        total_carb += carb_g
+        total_kcal += kcal_g
+
+        serve_rows.append({
+            "食材": name,
+            "建議克數(g)": round(grams, 1),
+            "蛋白(g)": round(prot_g, 1),
+            "脂肪(g)": round(fat_g, 1),
+            "碳水(g)": round(carb_g, 1),
+            "熱量(kcal)": round(kcal_g, 1),
+            "固定?": ""
+        })
+
+    df_fixed = pd.DataFrame(serve_rows)
+    st.dataframe(df_fixed, use_container_width=True)
+
+    # --- 整體營養比例 ---
+    if total_kcal > 0:
+        prot_pct = (total_prot * 4 / total_kcal) * 100
+        fat_pct  = (total_fat * 9 / total_kcal) * 100
+        carb_pct = (total_carb * 4 / total_kcal) * 100
+
+        st.caption(
+            f"整體營養比例：蛋白質 {prot_pct:.1f}％、脂肪 {fat_pct:.1f}％、碳水 {carb_pct:.1f}％"
+        )
+
+    col_g, col_kcal = st.columns(2)
+    with col_g:
+        st.metric("🍽️ 鮮食總克數（固定模式）", f"{(fixed_grams + total_other_g):.0f} g / 天")
+    with col_kcal:
+        st.metric("🔥 鮮食提供熱量（固定模式）", f"{total_kcal:.0f} kcal / 天")
