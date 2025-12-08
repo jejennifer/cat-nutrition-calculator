@@ -713,11 +713,6 @@ if selected_fixed:
         final_kcal = fixed_total_kcal + dry_total_kcal    + total_auto_kcal
 
         # --- 🔢 最終營養比例（含乾糧 + 所有鮮食） ---
-        #final_carb = 0  # 若你未計算碳水，可在此加總 carb；目前假設 fixed + auto 已加總 total_auto_carb
-
-        # 若你有計算 total_auto_carb、fixed_total_carb，則：
-        # final_carb = fixed_total_carb + total_auto_carb + (dry_carb_total if 有的話)
-
         total_kcal_all = final_kcal
 
         if total_kcal_all > 0:
