@@ -624,49 +624,116 @@ if selected_fixed:
     remain_kcal = max(mer - dry_total_kcal - fixed_total_kcal, 0)
     remain_prot = max(recommend_protein_g - dry_protein_total - fixed_total_prot, 0)
     remain_fat  = max(recommend_fat_g     - dry_fat_total     - fixed_total_fat , 0)
+    remain_carb  = max(target_carb_g     - dry_carb_total     - fixed_total_carb , 0)
 
     st.write("### ⚖️ 仍需補足的每日營養")
-    colR1, colR2, colR3 = st.columns(3)
+    colR1, colR2, colR3, colR4 = st.columns(4)
     with colR1:
         st.metric("需補熱量", f"{remain_kcal:.0f} kcal/天")
     with colR2:
         st.metric("需補蛋白質", f"{remain_prot:.1f} g/天")
     with colR3:
         st.metric("需補脂肪", f"{remain_fat:.1f} g/天")
+    with colR4:
+        st.metric("需補碳水", f"{remain_carb:.1f} g/天")
+    
+    # --- 找出需要自動計算的食材（使用者未輸入克數者） ---
+    auto_items = [name for name, g in fixed_input.items() if g == 0]
 
-    # 👉 選擇補足用食材
-    st.write("### 🥚 選擇補足用的食材（例如蛋、雞胸…）")
-    balancer = st.selectbox(
-        "選擇用來補足剩餘營養的食材",
-        fixed_candidates["食物名稱"].tolist(),
-        key="balancer_sel"
-    )
+    if auto_items and remain_kcal > 0:
 
-    if balancer:
-        row_b = fixed_candidates[fixed_candidates["食物名稱"] == balancer].iloc[0]
+        st.write("### 🧮 自動計算補足食材（依 65/22.5/12.5 營養比例）")
 
-        b_prot_pct = float(row_b["蛋白質"]) / 100.0
-        b_fat_pct  = float(row_b["脂肪"])   / 100.0
-        b_carb_pct = float(row_b["碳水"])   / 100.0
-        b_kcal_g   = float(row_b["kcal_per_g"])
+        # 目標能量比例下的 g/kcal（缺口專用）
+        t_prot_per_kcal = remain_prot / remain_kcal if remain_kcal > 0 else 0
+        t_fat_per_kcal  = remain_fat  / remain_kcal if remain_kcal > 0 else 0
+        t_carb_per_kcal = remain_carb  / remain_kcal if remain_kcal > 0 else 0
 
-        # 三種需求換算成需要的克數
-        grams_by_kcal = remain_kcal / b_kcal_g if b_kcal_g > 0 else 0
-        grams_by_prot = remain_prot / b_prot_pct if b_prot_pct > 0 else 0
-        grams_by_fat  = remain_fat  / b_fat_pct  if b_fat_pct  > 0 else 0
+        # --- 計算每個食材與缺口營養差距 → 權重 ---
+        weights = []
+        for name in auto_items:
+            row = fixed_candidates[fixed_candidates["食物名稱"] == name].iloc[0]
+            kcal_g = float(row["kcal_per_g"])
 
-        # 取最大值 → 確保三種營養都補足
-        need_balancer_g = max(grams_by_kcal, grams_by_prot, grams_by_fat)
+            if kcal_g <= 0:
+                w = 1e-6
+            else:
+                ppk = (float(row["蛋白質"]) / 100) / kcal_g
+                fpk = (float(row["脂肪"]) / 100)   / kcal_g
+                cpk = (float(row["碳水"]) / 100)   / kcal_g
 
-        st.write("### 🧮 建議補足食材克數")
-        st.metric(f"{balancer} 建議用量", f"{need_balancer_g:.1f} g/天")
+                d = math.sqrt(
+                    (ppk - t_prot_per_kcal)**2 +
+                    (fpk - t_fat_per_kcal)**2 +
+                    (cpk - t_carb_per_kcal)**2
+                )
+                w = 1 / (d + 1e-6)
+            weights.append((name, w))
 
-        # 最終營養顯示
-        final_prot = fixed_total_prot + dry_protein_total + need_balancer_g * b_prot_pct
-        final_fat  = fixed_total_fat  + dry_fat_total     + need_balancer_g * b_fat_pct
-        final_kcal = fixed_total_kcal + dry_total_kcal    + need_balancer_g * b_kcal_g
+        sum_w = sum(w for _, w in weights) or 1
 
-        st.write("### 📊 最終每日營養（乾糧 + 固定食材 + 補足食材）")
+        # --- 分配剩餘熱量給 auto items ---
+        auto_rows = []
+        total_auto_prot = total_auto_fat = total_auto_carb = total_auto_kcal = 0.0
+
+        for name, w in weights:
+            share = w / sum_w
+            kcal_i = remain_kcal * share
+
+            row = fixed_candidates[fixed_candidates["食物名稱"] == name].iloc[0]
+            kcal_g = float(row["kcal_per_g"])
+
+            grams_i = kcal_i / kcal_g if kcal_g > 0 else 0
+
+            prot_i = grams_i * float(row["蛋白質"]) / 100
+            fat_i  = grams_i * float(row["脂肪"])   / 100
+            carb_i  = grams_i * float(row["碳水"])   / 100
+            kcal_i = grams_i * kcal_g
+
+            total_auto_prot += prot_i
+            total_auto_fat  += fat_i
+            total_auto_carb += carb_i
+            total_auto_kcal += kcal_i
+
+            auto_rows.append({
+                "食材": name,
+                "建議補足克數(g)": round(grams_i, 1),
+                "蛋白(g)": round(prot_i, 1),
+                "脂肪(g)": round(fat_i, 1),
+                "碳水(g)": round(carb_i, 1),
+                "熱量(kcal)": round(kcal_i, 1),
+            })
+
+        st.dataframe(pd.DataFrame(auto_rows), use_container_width=True)
+
+        # --- 最終整體營養 ---
+        final_prot = fixed_total_prot + dry_protein_total + total_auto_prot
+        final_fat  = fixed_total_fat  + dry_fat_total     + total_auto_fat
+        final_carb  = fixed_total_carb  + dry_carb_total     + total_auto_carb
+        final_kcal = fixed_total_kcal + dry_total_kcal    + total_auto_kcal
+
+        # --- 🔢 最終營養比例（含乾糧 + 所有鮮食） ---
+        #final_carb = 0  # 若你未計算碳水，可在此加總 carb；目前假設 fixed + auto 已加總 total_auto_carb
+
+        # 若你有計算 total_auto_carb、fixed_total_carb，則：
+        # final_carb = fixed_total_carb + total_auto_carb + (dry_carb_total if 有的話)
+
+        total_kcal_all = final_kcal
+
+        if total_kcal_all > 0:
+            prot_pct = (final_prot * 4 / total_kcal_all) * 100
+            fat_pct  = (final_fat  * 9 / total_kcal_all) * 100
+            carb_pct = (final_carb * 4 / total_kcal_all) * 100
+        else:
+            prot_pct = fat_pct = carb_pct = 0
+
+        st.write(
+            f"### 🍽️ 整體營養比例（含乾糧＋所有鮮食）"
+            f"：蛋白質 **{prot_pct:.1f}%**、脂肪 **{fat_pct:.1f}%**、碳水 **{carb_pct:.1f}%**"
+        )
+
+        st.write("### 📊 最終每日營養（乾糧 + 固定食材 + 自動補足食材）")
         st.write(f"- 蛋白質：**{final_prot:.1f} g**")
         st.write(f"- 脂肪：**{final_fat:.1f} g**")
+        st.write(f"- 碳水：**{final_carb:.1f} g**")
         st.write(f"- 熱量：**{final_kcal:.1f} kcal**")
