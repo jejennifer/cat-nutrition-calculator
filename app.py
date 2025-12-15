@@ -3,9 +3,6 @@ import streamlit as st
 import pandas as pd
 import math
 import re
-# NEW: NNLS 會用到 numpy 和 scipy.optimize.nnls
-import numpy as np                     # NEW
-from scipy.optimize import nnls        # NEW
 
 st.set_page_config(page_title="貓咪營養素計算機", layout="wide")
 
