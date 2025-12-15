@@ -3,6 +3,9 @@ import streamlit as st
 import pandas as pd
 import math
 import re
+# NEW: NNLS 會用到 numpy 和 scipy.optimize.nnls
+import numpy as np                     # NEW
+from scipy.optimize import nnls        # NEW
 
 st.set_page_config(page_title="貓咪營養素計算機", layout="wide")
 
@@ -305,10 +308,6 @@ if selected_fresh:
             # total_kcal 已在上面彙總；若你想保險，也可用 df_serve["熱量(kcal)"].sum()
             st.metric("🔥 鮮食提供熱量", f"{total_kcal:.0f} kcal / 天")
 
-# --- 固定鮮食 + 計算所需雞蛋克數 ---------------------------------
-st.markdown("---")
-st.subheader("輸入手邊食材品項及克數，我們自動計算額外所需的雞蛋🥚克數給你！")
-
 # 乾糧貢獻（如果有選乾糧才會有 dry_df）
 if "dry_df" in locals() and not dry_df.empty:
     dry_protein_total = float(dry_df["蛋白(g)"].sum())
@@ -323,254 +322,6 @@ target_total_kcal = float(mer)
 target_protein_g  = float(recommend_protein_g)   # 之前算好的建議蛋白質（含 1.15 安全係數）
 target_fat_g      = float(recommend_fat_g)       # 之前算好的建議脂肪
 target_carb_g     = target_total_kcal * 0.125 / 4.0  # 12.5% 熱量來自碳水
-
-# 🔹 固定鮮食（不含雞蛋，由使用者輸入克數）
-fixed_candidates = fresh_candidates[fresh_candidates["食物名稱"] != "雞蛋"]
-selected_fixed = st.multiselect(
-    "選擇已確定克數的鮮食（不含雞蛋）",
-    fixed_candidates["食物名稱"].tolist(),
-    key="fixed_fresh"
-)
-
-fixed_rows = []
-fixed_prot = fixed_fat = fixed_carb = fixed_kcal = 0.0
-
-if selected_fixed:
-    st.caption("輸入目前已準備的每種食材克數，系統會幫你算出還需要補多少『雞蛋』。")
-    for name in selected_fixed:
-        row = fixed_candidates[fixed_candidates["食物名稱"] == name].iloc[0]
-        grams = st.number_input(
-            f"{name} 克數",
-            min_value=0.0,
-            step=1.0,
-            value=0.0,
-            key=f"fixed_{name}"
-        )
-        prot_g = grams * float(row["蛋白質"]) / 100.0
-        fat_g  = grams * float(row["脂肪"])   / 100.0
-        carb_g = grams * float(row["碳水"])   / 100.0
-        kcal   = grams * float(row["kcal_per_g"])
-
-        fixed_prot += prot_g
-        fixed_fat  += fat_g
-        fixed_carb += carb_g
-        fixed_kcal += kcal
-
-        fixed_rows.append({
-            "食材": name,
-            "克數(g)": round(grams, 1),
-            "蛋白(g)": round(prot_g, 1),
-            "脂肪(g)": round(fat_g, 1),
-            "碳水(g)": round(carb_g, 1),
-            "熱量(kcal)": round(kcal, 1),
-        })
-
-if fixed_rows:
-    st.dataframe(pd.DataFrame(fixed_rows), use_container_width=True)
-
-# 🔹 找出「雞蛋」的營養資料
-egg_row = fresh_candidates[fresh_candidates["食物名稱"] == "雞蛋"]
-if egg_row.empty:
-    st.warning("⚠️ 鮮食資料庫中找不到「雞蛋」這個食材，無法計算所需雞蛋克數。")
-else:
-    egg = egg_row.iloc[0]
-    egg_prot_per_g = float(egg["蛋白質"]) / 100.0
-    egg_fat_per_g  = float(egg["脂肪"])   / 100.0
-    egg_carb_per_g = float(egg["碳水"])  / 100.0
-    egg_kcal_per_g = float(egg["kcal_per_g"])
-
-    # 🔹 乾糧 + 固定鮮食 已經提供的總營養
-    base_prot = dry_protein_total + fixed_prot
-    base_fat  = dry_fat_total     + fixed_fat
-    base_carb = dry_carb_total    + fixed_carb
-    base_kcal = dry_kcal_total    + fixed_kcal
-
-    # 🔹 還需要補多少營養素（不足為 0，不會變成負值）
-    need_kcal = max(target_total_kcal - base_kcal, 0.0)
-    need_prot = max(target_protein_g - base_prot, 0.0)
-    need_fat  = max(target_fat_g     - base_fat, 0.0)
-    need_carb = max(target_carb_g    - base_carb, 0.0)
-
-    # 若完全不缺營養，就不必再加雞蛋
-    if need_kcal <= 0 and need_prot <= 0 and need_fat <= 0 and need_carb <= 0:
-        st.info("目前乾糧＋固定鮮食已經達到設定的熱量與營養目標，不一定需要再加雞蛋。")
-    else:
-        # 🔹 由「熱量 / 蛋白 / 脂肪 / 碳水」四個角度估算需要補多少克雞蛋
-        g_by_kcal = need_kcal / egg_kcal_per_g if egg_kcal_per_g > 0 else 0.0
-        g_by_prot = need_prot / egg_prot_per_g if egg_prot_per_g > 0 else 0.0
-        g_by_fat  = need_fat  / egg_fat_per_g  if egg_fat_per_g  > 0 else 0.0
-        g_by_carb = need_carb / egg_carb_per_g if egg_carb_per_g > 0 else 0.0
-
-        egg_grams = max(g_by_kcal, g_by_prot, g_by_fat, g_by_carb)
-
-        # 🔹 加上雞蛋後的總營養
-        total_prot = base_prot + egg_grams * egg_prot_per_g
-        total_fat  = base_fat  + egg_grams * egg_fat_per_g
-        total_carb = base_carb + egg_grams * egg_carb_per_g
-        total_kcal = base_kcal + egg_grams * egg_kcal_per_g
-
-        # 顯示結果
-        st.metric("🥚建議雞蛋克數", f"{egg_grams:.0f} g / 天")
-
-        result_rows = fixed_rows.copy()
-        result_rows.append({
-            "食材": "雞蛋（計算得出）",
-            "克數(g)": round(egg_grams, 1),
-            "蛋白(g)": round(egg_grams * egg_prot_per_g, 1),
-            "脂肪(g)": round(egg_grams * egg_fat_per_g, 1),
-            "碳水(g)": round(egg_grams * egg_carb_per_g, 1),
-            "熱量(kcal)": round(egg_grams * egg_kcal_per_g, 1),
-        })
-        st.dataframe(pd.DataFrame(result_rows), use_container_width=True)
-
-        # 🔹 最終整體營養比例（含乾糧＋固定鮮食＋雞蛋）
-        if total_kcal > 0:
-            final_prot_pct = total_prot * 4 / total_kcal * 100
-            final_fat_pct  = total_fat  * 9 / total_kcal * 100
-            final_carb_pct = total_carb * 4 / total_kcal * 100
-            st.caption(
-                f"整體營養比例（含乾糧＋所有鮮食）："
-                f"蛋白質 {final_prot_pct:.1f}%、脂肪 {final_fat_pct:.1f}%、碳水 {final_carb_pct:.1f}%"
-            )
-
-# --- 固定食材模式：使用者輸入某食材的克數，其他自動補齊 ---
-st.markdown("---")
-st.subheader("🥚 固定食材克數 → 自動補齊其他鮮食")
-
-fresh_candidates = df[df["類型"].str.contains("生", na=False)]
-selected_fixed_mode = st.multiselect(
-    "選擇要加入配方的食材（固定模式，可複選）",
-    fresh_candidates["食物名稱"].tolist(),
-)
-
-if selected_fixed_mode:
-
-    # 使用者選擇哪一個是「固定克數」的食材
-    fixed_item = st.selectbox("選擇要固定克數的食材", selected_fixed_mode)
-
-    fixed_grams = st.number_input(
-        f"{fixed_item} 固定克數",
-        min_value=0.0,
-        value=50.0,
-        step=1.0
-    )
-
-    # --- 營養素目標比例 ---
-    t_prot_per_kcal = 0.65 / 4.0     # g/kcal
-    t_fat_per_kcal  = 0.225 / 9.0
-    t_carb_per_kcal = 0.125 / 4.0
-
-    # --- 計算固定食材的營養 ---
-    row_f = fresh_candidates[fresh_candidates["食物名稱"] == fixed_item].iloc[0]
-    kcal_fixed = fixed_grams * float(row_f["kcal_per_g"])
-    prot_fixed = fixed_grams * float(row_f["蛋白質"]) / 100
-    fat_fixed  = fixed_grams * float(row_f["脂肪"])   / 100
-    carb_fixed = fixed_grams * float(row_f["碳水"])   / 100
-
-    # --- 根據乾糧與整體 MER 計算剩餘熱量 ---
-    rem_kcal_for_fresh = max(remaining_kcal - kcal_fixed, 0)
-
-    st.write(f"🔥 固定食材提供熱量：**{kcal_fixed:.1f} kcal**")
-    st.write(f"⚖️ 其他鮮食需補熱量：**{rem_kcal_for_fresh:.1f} kcal**")
-
-    # --- 計算其他食材的權重（沿用你現在的距離算法） ---
-    other_items = [x for x in selected_fixed_mode if x != fixed_item]
-
-    weights = []
-    for name in other_items:
-        row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
-        kcal_g = float(row["kcal_per_g"])
-
-        if kcal_g <= 0:
-            w = 1e-6
-        else:
-            ppk = (float(row["蛋白質"]) / 100) / kcal_g
-            fpk = (float(row["脂肪"]) / 100) / kcal_g
-            cpk = (float(row["碳水"]) / 100) / kcal_g
-
-            d = math.sqrt(
-                (ppk - t_prot_per_kcal)**2 +
-                (fpk - t_fat_per_kcal)**2 +
-                (cpk - t_carb_per_kcal)**2
-            )
-            w = 1.0 / (d + 1e-6)
-
-        weights.append((name, w))
-
-    sumw = sum(w for _, w in weights) if weights else 1.0
-
-    # --- 計算混合熱量密度 kcal/g ---
-    mix_kcal_per_g = 0
-    for name, w in weights:
-        frac = w / sumw
-        row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
-        mix_kcal_per_g += frac * float(row["kcal_per_g"])
-
-    total_other_g = rem_kcal_for_fresh / mix_kcal_per_g if mix_kcal_per_g > 0 else 0
-
-    # --- 分配克數 ---
-    serve_rows = []
-
-    # 先放固定項目
-    serve_rows.append({
-        "食材": fixed_item,
-        "建議克數(g)": round(fixed_grams, 1),
-        "蛋白(g)": round(prot_fixed, 1),
-        "脂肪(g)": round(fat_fixed, 1),
-        "碳水(g)": round(carb_fixed, 1),
-        "熱量(kcal)": round(kcal_fixed, 1),
-        "固定?": "✔"
-    })
-
-    # 其他自動生成
-    total_prot = prot_fixed
-    total_fat = fat_fixed
-    total_carb = carb_fixed
-    total_kcal = kcal_fixed
-
-    for name, w in weights:
-        frac = w / sumw
-        grams = total_other_g * frac
-        row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
-
-        prot_g = grams * float(row["蛋白質"]) / 100
-        fat_g  = grams * float(row["脂肪"])   / 100
-        carb_g = grams * float(row["碳水"])   / 100
-        kcal_g = grams * float(row["kcal_per_g"])
-
-        total_prot += prot_g
-        total_fat  += fat_g
-        total_carb += carb_g
-        total_kcal += kcal_g
-
-        serve_rows.append({
-            "食材": name,
-            "建議克數(g)": round(grams, 1),
-            "蛋白(g)": round(prot_g, 1),
-            "脂肪(g)": round(fat_g, 1),
-            "碳水(g)": round(carb_g, 1),
-            "熱量(kcal)": round(kcal_g, 1),
-            "固定?": ""
-        })
-
-    df_fixed = pd.DataFrame(serve_rows)
-    st.dataframe(df_fixed, use_container_width=True)
-
-    # --- 整體營養比例 ---
-    if total_kcal > 0:
-        prot_pct = (total_prot * 4 / total_kcal) * 100
-        fat_pct  = (total_fat * 9 / total_kcal) * 100
-        carb_pct = (total_carb * 4 / total_kcal) * 100
-
-        st.caption(
-            f"整體營養比例：蛋白質 {prot_pct:.1f}％、脂肪 {fat_pct:.1f}％、碳水 {carb_pct:.1f}％"
-        )
-
-    col_g, col_kcal = st.columns(2)
-    with col_g:
-        st.metric("🍽️ 鮮食總克數（固定模式）", f"{(fixed_grams + total_other_g):.0f} g / 天")
-    with col_kcal:
-        st.metric("🔥 鮮食提供熱量（固定模式）", f"{total_kcal:.0f} kcal / 天")
 
 # --- 固定克數模式（使用者輸入多種食材克數 → 補足某一食材） ---
 st.markdown("---")
@@ -645,9 +396,13 @@ if selected_fixed:
         st.write("### 🧮 自動計算補足食材（依 65/22.5/12.5 營養比例）")
 
         # 目標能量比例下的 g/kcal（缺口專用）
-        t_prot_per_kcal = remain_prot / remain_kcal if remain_kcal > 0 else 0
-        t_fat_per_kcal  = remain_fat  / remain_kcal if remain_kcal > 0 else 0
-        t_carb_per_kcal = remain_carb  / remain_kcal if remain_kcal > 0 else 0
+        # t_prot_per_kcal = remain_prot / remain_kcal if remain_kcal > 0 else 0
+        # t_fat_per_kcal  = remain_fat  / remain_kcal if remain_kcal > 0 else 0
+        # t_carb_per_kcal = remain_carb  / remain_kcal if remain_kcal > 0 else 0
+
+        t_prot_per_kcal = 0.65 / 4.0     # ✅ 固定目標：每 1 kcal 希望有多少 g 蛋白
+        t_fat_per_kcal  = 0.225 / 9.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 脂肪
+        t_carb_per_kcal = 0.125 / 4.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 碳水
 
         # --- 計算每個食材與缺口營養差距 → 權重 ---
         weights = []
@@ -707,10 +462,10 @@ if selected_fixed:
         st.dataframe(pd.DataFrame(auto_rows), use_container_width=True)
 
         # --- 最終整體營養 ---
-        final_prot = fixed_total_prot + dry_protein_total + total_auto_prot
-        final_fat  = fixed_total_fat  + dry_fat_total     + total_auto_fat
-        final_carb  = fixed_total_carb  + dry_carb_total     + total_auto_carb
-        final_kcal = fixed_total_kcal + dry_total_kcal    + total_auto_kcal
+        final_prot = fixed_total_prot + total_auto_prot #+ dry_protein_total
+        final_fat  = fixed_total_fat + total_auto_fat #+ dry_fat_total
+        final_carb  = fixed_total_carb + total_auto_carb #+ dry_carb_total
+        final_kcal = fixed_total_kcal + total_auto_kcal #+ dry_total_kcal
 
         # --- 🔢 最終營養比例（含乾糧 + 所有鮮食） ---
         total_kcal_all = final_kcal
