@@ -204,11 +204,15 @@ if dry_rows:
 
     st.dataframe(total_row, use_container_width=True)
 
-st.metric("乾糧提供熱量", f"{dry_total_kcal:.0f} kcal / 天")
-
 remaining_kcal = max(mer - dry_total_kcal, 0.0)
-st.metric("⚖️ 鮮食需補熱量", f"{remaining_kcal:.0f} kcal / 天")
 
+# 兩個重點指標：總克數 & 鮮食提供熱量
+col_g, col_kcal = st.columns(2)
+with col_g:
+    st.metric("🔥乾糧提供熱量", f"{dry_total_kcal:.0f} kcal / 天")
+with col_kcal:
+    # total_kcal 已在上面彙總；若你想保險，也可用 df_serve["熱量(kcal)"].sum()
+    st.metric("⚖️鮮食需補熱量", f"{remaining_kcal:.0f} kcal / 天")
 
 # --- 食材選擇與自動配比（依 65:22.5:12.5 熱量比例）---
 st.markdown("---")
@@ -294,7 +298,7 @@ if selected_fresh:
             fat_pct  = (total_fat * 9 / total_kcal) * 100
             carb_pct = (total_carb * 4 / total_kcal) * 100
             st.caption(
-                f"整體營養比例：蛋白質 {prot_pct:.1f}%、脂肪 {fat_pct:.1f}%、碳水 {carb_pct:.1f}%"
+                f"整體鮮食營養比例：蛋白質 {prot_pct:.1f}%、脂肪 {fat_pct:.1f}%、碳水 {carb_pct:.1f}%"
             )
 
         # 兩個重點指標：總克數 & 鮮食提供熱量
@@ -362,11 +366,7 @@ if selected_fixed:
         fixed_total_carb += carb_g
         fixed_total_kcal += kcal
 
-    st.write("### 📘 固定食材提供的營養")
-    st.write(f"- 蛋白質：**{fixed_total_prot:.1f} g**")
-    st.write(f"- 脂肪：**{fixed_total_fat:.1f} g**")
-    st.write(f"- 碳水：**{fixed_total_carb:.1f} g**")
-    st.write(f"- 熱量：**{fixed_total_kcal:.1f} kcal**")
+    st.write("### 📘 固定食材提供的營養：",f"蛋白質**{fixed_total_prot:.1f} g**",f"、脂肪**{fixed_total_fat:.1f} g**",f"、碳水**{fixed_total_carb:.1f} g**",f"、熱量**{fixed_total_kcal:.1f} kcal**")
 
     # 👉 計算剩餘需求（扣除乾糧 + 固定食材）
     remain_kcal = max(mer - dry_total_kcal - fixed_total_kcal, 0)
@@ -392,14 +392,14 @@ if selected_fixed:
 
         st.write("### 🧮 自動計算補足食材（依 65/22.5/12.5 營養比例）")
 
-        # 目標能量比例下的 g/kcal（缺口專用）
-        # t_prot_per_kcal = remain_prot / remain_kcal if remain_kcal > 0 else 0
-        # t_fat_per_kcal  = remain_fat  / remain_kcal if remain_kcal > 0 else 0
-        # t_carb_per_kcal = remain_carb  / remain_kcal if remain_kcal > 0 else 0
+        #目標能量比例下的 g/kcal（缺口專用）
+        t_prot_per_kcal = remain_prot / remain_kcal if remain_kcal > 0 else 0
+        t_fat_per_kcal  = remain_fat  / remain_kcal if remain_kcal > 0 else 0
+        t_carb_per_kcal = remain_carb  / remain_kcal if remain_kcal > 0 else 0
 
-        t_prot_per_kcal = 0.65 / 4.0     # ✅ 固定目標：每 1 kcal 希望有多少 g 蛋白
-        t_fat_per_kcal  = 0.225 / 9.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 脂肪
-        t_carb_per_kcal = 0.125 / 4.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 碳水
+        # t_prot_per_kcal = 0.65 / 4.0     # ✅ 固定目標：每 1 kcal 希望有多少 g 蛋白
+        # t_fat_per_kcal  = 0.225 / 9.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 脂肪
+        # t_carb_per_kcal = 0.125 / 4.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 碳水
 
         # --- 計算每個食材與缺口營養差距 → 權重 ---
         weights = []
@@ -459,10 +459,10 @@ if selected_fixed:
         st.dataframe(pd.DataFrame(auto_rows), use_container_width=True)
 
         # --- 最終整體營養 ---
-        final_prot = fixed_total_prot + total_auto_prot #+ dry_protein_total
-        final_fat  = fixed_total_fat + total_auto_fat #+ dry_fat_total
-        final_carb  = fixed_total_carb + total_auto_carb #+ dry_carb_total
-        final_kcal = fixed_total_kcal + total_auto_kcal #+ dry_total_kcal
+        final_prot = fixed_total_prot + total_auto_prot + dry_protein_total
+        final_fat  = fixed_total_fat + total_auto_fat + dry_fat_total
+        final_carb  = fixed_total_carb + total_auto_carb + dry_carb_total
+        final_kcal = fixed_total_kcal + total_auto_kcal + dry_total_kcal
 
         # --- 🔢 最終營養比例（含乾糧 + 所有鮮食） ---
         total_kcal_all = final_kcal
@@ -474,13 +474,8 @@ if selected_fixed:
         else:
             prot_pct = fat_pct = carb_pct = 0
 
+        st.write("### 最終每日營養：",f"蛋白質**{final_prot:.1f} g**",f"、脂肪**{final_fat:.1f} g**",f"、碳水**{final_carb:.1f} g**",f"、熱量**{final_kcal:.1f} kcal**")
         st.write(
-            f"### 🍽️ 整體營養比例（含乾糧＋所有鮮食）"
-            f"：蛋白質 **{prot_pct:.1f}%**、脂肪 **{fat_pct:.1f}%**、碳水 **{carb_pct:.1f}%**"
+            f"##### (最終營養比例"
+            f"：蛋白質 **{prot_pct:.1f}%**、脂肪 **{fat_pct:.1f}%**、碳水 **{carb_pct:.1f}%**)"
         )
-
-        st.write("### 📊 最終每日營養（乾糧 + 固定食材 + 自動補足食材）")
-        st.write(f"- 蛋白質：**{final_prot:.1f} g**")
-        st.write(f"- 脂肪：**{final_fat:.1f} g**")
-        st.write(f"- 碳水：**{final_carb:.1f} g**")
-        st.write(f"- 熱量：**{final_kcal:.1f} kcal**")
