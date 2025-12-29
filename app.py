@@ -479,3 +479,38 @@ if selected_fixed:
             f"##### (最終營養比例"
             f"：蛋白質 **{prot_pct:.1f}%**、脂肪 **{fat_pct:.1f}%**、碳水 **{carb_pct:.1f}%**)"
         )
+
+        # --- 多天備餐模式 ---
+        st.markdown("---")
+        auto_df = pd.DataFrame(auto_rows)
+
+        # 使用者輸入要準備幾天的鮮食 → 計算總備餐克數
+        st.markdown("### 📦 備餐模式：一次準備多天（依自動計算補足表）")
+
+        prep_days = st.number_input(
+            "你要準備幾天的鮮食？",
+            min_value=1,
+            step=1,
+            value=1,
+            key="prep_days"
+        )
+
+        # 固定食材 + 自動補足食材 合併成「總備餐清單」
+        fixed_list = []
+        for name, grams in fixed_input.items():
+            if grams > 0:
+                fixed_list.append({"食材": name, "每日克數(g)": float(grams)})
+
+        fixed_df = pd.DataFrame(fixed_list) if fixed_list else pd.DataFrame(columns=["食材", "每日克數(g)"])
+        auto_daily_df = auto_df.rename(columns={"建議補足克數(g)": "每日克數(g)"})[["食材", "每日克數(g)"]]
+
+        all_daily_df = pd.concat([fixed_df, auto_daily_df], ignore_index=True)
+
+        # 同名食材合併（以防同一食材同時在固定與補足裡）
+        all_daily_df = all_daily_df.groupby("食材", as_index=False)["每日克數(g)"].sum()
+
+        all_prep_df = all_daily_df.copy()
+        all_prep_df["總克數(g)"] = (all_prep_df["每日克數(g)"] * prep_days).round(1)
+
+        st.markdown("### 🧾 全部食材總備餐清單（固定 + 補足）")
+        st.dataframe(all_prep_df, use_container_width=True)
