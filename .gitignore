@@ -28,7 +28,9 @@ __pycache__
 coverage/
 
 ### vscode
-.vscode
+.vscode/*
+!.vscode/
+!.vscode/settings.json
 
 *.db
 
