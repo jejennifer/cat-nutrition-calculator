@@ -204,7 +204,7 @@ if dry_rows:
 
     st.dataframe(total_row, use_container_width=True)
 
-remaining_kcal = max(mer - dry_total_kcal, 0.0)
+remain_kcal = max(mer - dry_total_kcal, 0.0)
 
 # 兩個重點指標：總克數 & 鮮食提供熱量
 col_g, col_kcal = st.columns(2)
@@ -212,10 +212,26 @@ with col_g:
     st.metric("🔥乾糧提供熱量", f"{dry_total_kcal:.0f} kcal / 天")
 with col_kcal:
     # total_kcal 已在上面彙總；若你想保險，也可用 df_serve["熱量(kcal)"].sum()
-    st.metric("⚖️鮮食需補熱量", f"{remaining_kcal:.0f} kcal / 天")
+    st.metric("⚖️鮮食需補熱量", f"{remain_kcal:.0f} kcal / 天")
 
 # --- 食材選擇與自動配比（依 65:22.5:12.5 熱量比例）---
 st.markdown("---")
+
+# 乾糧貢獻（如果有選乾糧才會有 dry_df）
+if "dry_df" in locals() and not dry_df.empty:
+    dry_protein_total = float(dry_df["蛋白(g)"].sum())
+    dry_fat_total     = float(dry_df["脂肪(g)"].sum())
+    dry_carb_total    = float(dry_df["碳水(g)"].sum())
+    dry_kcal_total    = float(dry_df["提供熱量(kcal)"].sum())
+else:
+    dry_protein_total = dry_fat_total = dry_carb_total = dry_kcal_total = 0.0
+
+# 目標：整天（乾糧＋所有鮮食）要達到的營養量
+target_total_kcal = float(mer)
+target_protein_g  = float(recommend_protein_g)   # 之前算好的建議蛋白質（含 1.15 安全係數）
+target_fat_g      = float(recommend_fat_g)       # 之前算好的建議脂肪
+target_carb_g     = target_total_kcal * 0.125 / 4.0  # 12.5% 熱量來自碳水
+
 fresh_candidates = df[df["類型"].str.contains("生", na=False)]
 selected_fresh = st.multiselect("選擇鮮食食材（可複選）", fresh_candidates["食物名稱"].tolist())
 
@@ -223,10 +239,20 @@ ratio_map = {}
 if selected_fresh:
     st.caption("系統已依 65% 蛋白、22.5% 脂肪、12.5% 碳水 的熱量比例，自動推薦每日鮮食份量。")
 
-    # 目標 g/kcal（1g 蛋白/碳水=4kcal，1g 脂肪=9kcal）
-    t_prot_per_kcal = 0.65 / 4.0
-    t_fat_per_kcal  = 0.225 / 9.0
-    t_carb_per_kcal = 0.125 / 4.0
+    # --- 鮮食需要補的營養缺口（扣掉乾糧） ---
+    remain_protein_g = max(target_protein_g - dry_protein_total, 0)
+    remain_fat_g     = max(target_fat_g     - dry_fat_total, 0)
+    remain_carb_g    = max(target_carb_g    - dry_carb_total, 0)
+
+    # 將「剩餘營養克數」換算成「每 kcal 所需的營養密度（g / kcal）」
+    # 用於後續權重計算，讓鮮食配比依據「實際尚未補足的營養缺口」
+    if remain_kcal > 0:
+        t_prot_per_kcal = remain_protein_g / remain_kcal
+        t_fat_per_kcal  = remain_fat_g     / remain_kcal
+        t_carb_per_kcal = remain_carb_g    / remain_kcal
+    else:
+        # 避免除以 0，若無剩餘熱量則設為 0
+        t_prot_per_kcal = t_fat_per_kcal = t_carb_per_kcal = 0.0
 
     # 距離越接近目標宏量比例 → 權重越高
     weights = []
@@ -253,14 +279,14 @@ if selected_fresh:
     sum_ratio = sum(ratio_map.values())
 
     # 🧮 根據熱量缺口計算建議總克數與每項食材克數
-    if "remaining_kcal" in locals():
+    if "remain_kcal" in locals():
         mix_kcal_per_g = 0.0
         for name, r in ratio_map.items():
             frac = r / sum_ratio
             row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
             mix_kcal_per_g += frac * float(row["kcal_per_g"])
 
-        total_fresh_g = remaining_kcal / mix_kcal_per_g if mix_kcal_per_g > 0 else 0
+        total_fresh_g = remain_kcal / mix_kcal_per_g if mix_kcal_per_g > 0 else 0
 
         serve_rows = []
         total_prot = total_fat = total_carb = total_kcal = 0.0
@@ -308,21 +334,6 @@ if selected_fresh:
         with col_kcal:
             # total_kcal 已在上面彙總；若你想保險，也可用 df_serve["熱量(kcal)"].sum()
             st.metric("🔥 鮮食提供熱量", f"{total_kcal:.0f} kcal / 天")
-
-# 乾糧貢獻（如果有選乾糧才會有 dry_df）
-if "dry_df" in locals() and not dry_df.empty:
-    dry_protein_total = float(dry_df["蛋白(g)"].sum())
-    dry_fat_total     = float(dry_df["脂肪(g)"].sum())
-    dry_carb_total    = float(dry_df["碳水(g)"].sum())
-    dry_kcal_total    = float(dry_df["提供熱量(kcal)"].sum())
-else:
-    dry_protein_total = dry_fat_total = dry_carb_total = dry_kcal_total = 0.0
-
-# 🔹 目標：整天（乾糧＋所有鮮食）要達到的營養量
-target_total_kcal = float(mer)
-target_protein_g  = float(recommend_protein_g)   # 之前算好的建議蛋白質（含 1.15 安全係數）
-target_fat_g      = float(recommend_fat_g)       # 之前算好的建議脂肪
-target_carb_g     = target_total_kcal * 0.125 / 4.0  # 12.5% 熱量來自碳水
 
 # --- 固定克數模式（使用者輸入多種食材克數 → 補足某一食材） ---
 st.markdown("---")
@@ -396,10 +407,6 @@ if selected_fixed:
         t_prot_per_kcal = remain_prot / remain_kcal if remain_kcal > 0 else 0
         t_fat_per_kcal  = remain_fat  / remain_kcal if remain_kcal > 0 else 0
         t_carb_per_kcal = remain_carb  / remain_kcal if remain_kcal > 0 else 0
-
-        # t_prot_per_kcal = 0.65 / 4.0     # ✅ 固定目標：每 1 kcal 希望有多少 g 蛋白
-        # t_fat_per_kcal  = 0.225 / 9.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 脂肪
-        # t_carb_per_kcal = 0.125 / 4.0    # ✅ 固定目標：每 1 kcal 希望有多少 g 碳水
 
         # --- 計算每個食材與缺口營養差距 → 權重 ---
         weights = []
