@@ -29,6 +29,8 @@ coverage/
 
 ### vscode
 .vscode
+!.vscode/
+!.vscode/settings.json
 
 *.db
 
