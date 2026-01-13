@@ -214,6 +214,31 @@ with col_kcal:
     # total_kcal 已在上面彙總；若你想保險，也可用 df_serve["熱量(kcal)"].sum()
     st.metric("⚖️鮮食需補熱量", f"{remain_kcal:.0f} kcal / 天")
 
+# >>> NEW: 先彙總乾糧提供的營養素（g/天）
+if dry_rows:
+    dry_protein_total = float(dry_df["蛋白(g)"].sum())
+    dry_fat_total     = float(dry_df["脂肪(g)"].sum())
+    dry_carb_total    = float(dry_df["碳水(g)"].sum())
+else:
+    dry_protein_total = dry_fat_total = dry_carb_total = 0.0
+
+# >>> NEW: 計算「鮮食需補」的營養素（用整天目標扣掉乾糧）
+# 你前面已經有 recommend_protein_g / recommend_fat_g / target_carb_g（或你用的目標變數）
+remain_prot = max(recommend_protein_g - dry_protein_total, 0.0)
+remain_fat  = max(recommend_fat_g     - dry_fat_total, 0.0)
+#remain_carb = max(target_carb_g       - dry_carb_total, 0.0)
+
+# >>> NEW: 顯示鮮食需補的營養素
+st.markdown("### 🥩 鮮食需補營養素（扣除乾糧後）")
+#c1, c2, c3 = st.columns(3)
+c1, c2 = st.columns(2)
+with c1:
+    st.metric("需補蛋白質", f"{remain_prot:.1f} g / 天")
+with c2:
+    st.metric("需補脂肪", f"{remain_fat:.1f} g / 天")
+# with c3:
+#     st.metric("需補碳水", f"{remain_carb:.1f} g / 天")
+
 # --- 食材選擇與自動配比（依 65:22.5:12.5 熱量比例）---
 st.markdown("---")
 
