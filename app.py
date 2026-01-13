@@ -494,6 +494,16 @@ if selected_fixed:
         # 使用者輸入要準備幾天的鮮食 → 計算總備餐克數
         st.markdown("### 📦 備餐模式：一次準備多天（依自動計算補足表）")
 
+        # 輸入要準備幾隻貓
+        prep_cats = st.number_input(
+            "你要準備幾隻貓的鮮食？",
+            min_value=1,
+            step=1,
+            value=1,
+            key="prep_cats"
+        )
+
+        # 輸入要準備幾天
         prep_days = st.number_input(
             "你要準備幾天的鮮食？",
             min_value=1,
@@ -517,7 +527,9 @@ if selected_fixed:
         all_daily_df = all_daily_df.groupby("食材", as_index=False)["每日克數(g)"].sum()
 
         all_prep_df = all_daily_df.copy()
-        all_prep_df["總克數(g)"] = (all_prep_df["每日克數(g)"] * prep_days).round(1)
+        all_prep_df["總克數(g)"] = (
+            all_prep_df["每日克數(g)"] * prep_days * prep_cats
+        ).round(1)
 
-        st.markdown("### 🧾 全部食材總備餐清單（固定 + 補足）")
+        st.markdown(f"### 🧾 全部食材總備餐清單（{prep_cats} 隻貓 × {prep_days} 天）")
         st.dataframe(all_prep_df, use_container_width=True)
