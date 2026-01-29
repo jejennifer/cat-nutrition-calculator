@@ -138,20 +138,12 @@ def macro_targets_from_mer(mer_kcal: float):
     tgt_carb_g = mer_kcal * TARGET_RATIO["carb"]    / KCAL_PER_G_CARB
     return tgt_prot_g, tgt_fat_g, tgt_carb_g
 
-def nnls_solve_grams(
-        candidates_df: pd.DataFrame, 
-        names: list[str], 
-        b_macros: np.ndarray, 
-        target_kcal: float, 
-        kcal_weight: float = 1.0):
+def nnls_solve_grams(candidates_df: pd.DataFrame, names: list[str], b_macros: np.ndarray):
     """
     用 NNLS 解 grams >= 0，使 A*grams ~= b
     A 是 (3,N)：每 1g 食材提供的 (prot,fat,carb) 克
     b 是 (3,)：需要補的 (prot,fat,carb) 克
     """
-    # ✅ CHANGED: NNLS 同時考慮 宏量 + 熱量（熱量為輔）
-    kcal_weight = 1.0  # 0~1：越大越重視熱量貼近目標
-
     A_cols = []
     valid = []
     for name in names:
@@ -163,7 +155,6 @@ def nnls_solve_grams(
             float(r["蛋白質"]) / 100.0,
             float(r["脂肪"])   / 100.0,
             float(r["碳水"])   / 100.0,
-            float(r["kcal_per_g"]) * kcal_weight,  # kcal per g food（加權）
         ])
         valid.append(name)
 
@@ -171,16 +162,7 @@ def nnls_solve_grams(
         return {}, "A 矩陣為空（沒有可用食材）"
 
     A = np.array(A_cols, dtype=float).T  # (3,N)
-    
-    # ✅ 這就是你要找的 b：把 3 個宏量 + 1 個加權熱量組起來
-    b = np.array([
-        float(b_macros[0]),
-        float(b_macros[1]),
-        float(b_macros[2]),
-        float(target_kcal) * kcal_weight,
-    ], dtype=float)
-
-    x, _ = nnls(A, b)
+    x, _ = nnls(A, b_macros.astype(float))
     grams_map = {name: float(g) for name, g in zip(valid, x)}
     return grams_map, None
 
@@ -281,7 +263,7 @@ if dry_rows:
     st.dataframe(total_row, use_container_width=True)
 
 # 乾糧提供熱量（保留你原本「熱量」概念：用標示熱量來做剩餘熱量顯示）
-remain_kcal = max(mer - dry_kcal_macro_total, 0.0)
+remain_kcal = max(mer - dry_kcal_label_total, 0.0)
 
 colA, colB = st.columns(2)
 with colA:
@@ -320,39 +302,13 @@ fresh_kcal_macro_total = 0.0
 if selected_fresh:
     st.caption("NNLS 會直接用你『需要補的蛋白/脂肪/碳水克數』去解各食材的克數（皆為非負）。")
 
-    b_macros = np.array([remain_prot_g, remain_fat_g, remain_carb_g], dtype=float)
+    b = np.array([remain_prot_g, remain_fat_g, remain_carb_g], dtype=float)
 
-    fresh_grams_map, err = nnls_solve_grams(
-        fresh_candidates,
-        selected_fresh,
-        b_macros,
-        target_kcal=remain_kcal,
-        kcal_weight=1.0)
+    fresh_grams_map, err = nnls_solve_grams(fresh_candidates, selected_fresh, b)
     if err:
         st.error(err)
     else:
-        # --- 第一步：先計算縮放比例（Scale） ---
-        # 這裡需要一個暫時的熱量總計來判斷是否超標
-        temp_kcal = 0.0
-        # serve_rows = []
-        for name in selected_fresh:
-            grams = fresh_grams_map.get(name, 0.0)
-            row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
-            # 簡單計算該食材提供的宏量熱量
-            temp_kcal += (grams * float(row["蛋白質"]) / 100.0 * KCAL_PER_G_PROT +
-                          grams * float(row["脂肪"])   / 100.0 * KCAL_PER_G_FAT +
-                          grams * float(row["碳水"])   / 100.0 * KCAL_PER_G_CARB)
-
-        if temp_kcal > remain_kcal and remain_kcal > 0:
-            scale = remain_kcal / temp_kcal
-            for name in fresh_grams_map:
-                fresh_grams_map[name] *= scale
-            st.warning(f"⚠️ 因食材組合無法達成理想比例（可能是脂肪過高），已自動按比例縮減克數，以優先符合總熱量限制。")
-        # --- 第二步：使用（可能已縮放過的）grams 產生最終數據 ---
         serve_rows = []
-        fresh_total_prot = fresh_total_fat = fresh_total_carb = 0.0
-        fresh_kcal_label_total = fresh_kcal_macro_total = 0.0
-
         for name in selected_fresh:
             grams = fresh_grams_map.get(name, 0.0)
             row = fresh_candidates[fresh_candidates["食物名稱"] == name].iloc[0]
@@ -452,63 +408,23 @@ if selected_fixed:
         st.metric("需補脂肪", f"{remain_fat2:.1f} g/天")
     with r3:
         st.metric("需補碳水", f"{remain_carb2:.1f} g/天")
-    
-    # # 這裡的 remain_kcal2 是給 NNLS 參考的上限
-    # current_total_kcal = dry_kcal_label_total + fixed_kcal_macro_total
-    # remain_kcal2 = max(mer - current_total_kcal, 0.0)
-
-    # 這裡的 remain_kcal2 是給 NNLS 參考的上限
-    current_total_kcal_macro = dry_kcal_macro_total + fixed_kcal_macro_total
-    remain_kcal2 = max(mer - current_total_kcal_macro, 0.0)
 
     # 自動補足食材：使用者輸入為 0 的那些（你原本的概念）
     auto_items = [name for name, g in fixed_input.items() if g == 0]
-    auto_grams_map = {}
+
+    auto_rows = []
+    total_auto_prot = total_auto_fat = total_auto_carb = 0.0
+    total_auto_kcal_macro = 0.0
 
     if auto_items and (remain_prot2 + remain_fat2 + remain_carb2) > 0:
         st.write("### 🧮 自動補足食材（NNLS）")
 
         b2 = np.array([remain_prot2, remain_fat2, remain_carb2], dtype=float)
-        auto_grams_map, err = nnls_solve_grams(
-            fixed_candidates,
-            auto_items,
-            b2,
-            target_kcal=remain_kcal,
-            kcal_weight=1.0)
-
-        # --- 核心修正：二次縮放校準 ---
-        # 計算「固定 + 自動」預計產生的鮮食總熱量
-        temp_auto_kcal = 0.0
-        for name, g in auto_grams_map.items():
-            r = fixed_candidates[fixed_candidates["食物名稱"] == name].iloc[0]
-            _, _, _, _, k_m = food_macros_from_grams(r, g)
-            temp_auto_kcal += k_m
-        
-        # 如果 (固定 + 自動) 超過 (MER - 乾糧)
-        fresh_limit = max(mer - dry_kcal_label_total, 0.0)
-        total_fresh_planned = fixed_kcal_macro_total + temp_auto_kcal
-        
-        if total_fresh_planned > fresh_limit and fresh_limit > 0:
-            # 我們只能縮放「自動補足」的部分，因為「固定」是你指定要餵的
-            # 如果連固定都超標，那就只能警告使用者
-            over_kcal = total_fresh_planned - fresh_limit
-            if temp_auto_kcal > over_kcal:
-                auto_scale = (temp_auto_kcal - over_kcal) / temp_auto_kcal
-                for name in auto_grams_map:
-                    auto_grams_map[name] *= auto_scale
-                st.warning(f"⚠️ 自動補足食材已依熱量上限縮減。")
-            else:
-                st.error(f"❌ 錯誤：單靠你設定的『固定食材』熱量就已經快爆了，建議減少固定食材克數。")
+        auto_grams_map, err = nnls_solve_grams(fixed_candidates, auto_items, b2)
 
         if err:
             st.error(err)
         else:
-            auto_rows = []
-            total_auto_prot = 0.0
-            total_auto_fat = 0.0
-            total_auto_carb = 0.0
-            total_auto_kcal_macro = 0.0
-
             for name in auto_items:
                 grams = auto_grams_map.get(name, 0.0)
                 row = fixed_candidates[fixed_candidates["食物名稱"] == name].iloc[0]
@@ -544,15 +460,12 @@ if selected_fixed:
             else:
                 prot_pct = fat_pct = carb_pct = 0.0
 
-            kcal_label_total = dry_kcal_label_total + fixed_kcal_macro_total + total_auto_kcal_macro
-
             st.write(
                 "### 最終每日營養（乾糧 + 固定 + 自動）"
                 f"\n\n- 蛋白質：**{final_prot:.1f} g**"
                 f"\n- 脂肪：**{final_fat:.1f} g**"
                 f"\n- 碳水：**{final_carb:.1f} g**"
                 f"\n- 熱量（宏量）：**{final_kcal_total:.0f} kcal**"
-                f"\n- 熱量（標示）：**{kcal_label_total:.0f} kcal**"
             )
             st.write(
                 f"##### (最終營養比例：蛋白 **{prot_pct:.1f}%**、脂肪 **{fat_pct:.1f}%**、碳水 **{carb_pct:.1f}%**)"
