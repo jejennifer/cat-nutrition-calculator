@@ -169,11 +169,20 @@ def nnls_solve_grams(candidates_df: pd.DataFrame, names: list[str], b_macros: np
 # =========================================================
 # 4) UI：基本資訊
 # =========================================================
-st.title("🐱 貓咪每日熱量 & 鮮食克數計算（NNLS 版）")
+if "step" not in st.session_state:
+    st.session_state.step = 1
+if "dry_skipped" not in st.session_state:
+    st.session_state.dry_skipped = False
+if "fresh_skipped" not in st.session_state:
+    st.session_state.fresh_skipped = False
 
-weight = st.number_input("體重 (kg)", min_value=0.1, step=0.1, value=4.0)
-age_group = st.selectbox("年齡層", ["幼貓 0-4月", "幼貓 4-6月", "結紮成貓", "未結紮成貓", "老貓", "減重"])
-activity = st.selectbox("活動量", ["低", "中", "高"])
+st.title("🐱 貓咪每日餵食建議")
+st.caption("依照貓咪資料與你手邊的食物，估算每日熱量、營養缺口與建議餵食克數。")
+
+st.subheader("1️⃣ 貓咪基本資料")
+weight = st.number_input("體重（公斤）", min_value=0.1, step=0.1, value=4.0, help="請輸入目前體重；例如 4 公斤請輸入 4.0。")
+age_group = st.selectbox("年齡與狀態", ["幼貓 0-4月", "幼貓 4-6月", "結紮成貓", "未結紮成貓", "老貓", "減重"], help="請選擇最符合貓咪目前狀態的選項。")
+activity = st.selectbox("平常活動量", ["低", "中", "高"], help="低：大多數時間休息；中：一般室內活動；高：經常奔跑或活動。")
 
 phys_factor_map = {
     "幼貓 0-4月": 3.0,
@@ -191,7 +200,7 @@ mer = rer * phys_factor_map[age_group] * activity_factor_map[activity]
 # 目標宏量（整天）
 target_prot_g, target_fat_g, target_carb_g = macro_targets_from_mer(mer)
 
-st.subheader("📊 計算結果")
+st.subheader("📊 每日目標")
 c1, c2, c3 = st.columns(3)
 with c1:
     st.metric("RER", f"{rer:.0f} kcal / 天")
@@ -205,14 +214,27 @@ with c3:
     st.write("目標比例（熱量）")
     st.write("蛋白 65% / 脂肪 22.5% / 碳水 12.5%")
 
+if st.session_state.step == 1:
+    _, next_col = st.columns([1, 1])
+    with next_col:
+        if st.button("下一步：填寫乾糧資料 →", type="primary", use_container_width=True):
+            st.session_state.step = 2
+            st.rerun()
+    st.stop()
+
 # =========================================================
 # 5) 乾糧區
 # =========================================================
 st.markdown("---")
-st.subheader("🥣 乾糧熱量扣除")
+st.subheader("2️⃣ 乾糧（沒有餵乾糧可略過）")
+st.caption("選擇正在餵的乾糧，接著輸入每種乾糧每天實際餵幾克；不確定時可先填 0。")
 
 dry_candidates = df[df["類型"].str.contains("乾", na=False)]
-selected_dry = st.multiselect("選擇乾糧（可複選）", dry_candidates["食物名稱"].tolist())
+if st.session_state.dry_skipped:
+    st.info("已略過乾糧，將以每天沒有餵乾糧計算。")
+    selected_dry = []
+else:
+    selected_dry = st.multiselect("你每天餵哪些乾糧？（可複選）", dry_candidates["食物名稱"].tolist(), help="可輸入食物名稱搜尋；若混餵多種，請全部選取。")
 
 dry_rows = []
 dry_protein_total = dry_fat_total = dry_carb_total = 0.0
@@ -276,23 +298,58 @@ remain_prot_g = max(target_prot_g - dry_protein_total, 0.0)
 remain_fat_g  = max(target_fat_g  - dry_fat_total, 0.0)
 remain_carb_g = max(target_carb_g - dry_carb_total, 0.0)
 
-st.markdown("### 🥩 鮮食需補營養素（扣除乾糧後）")
-m1, m2, m3 = st.columns(3)
-with m1:
-    st.metric("需補蛋白質", f"{remain_prot_g:.1f} g/天")
-with m2:
-    st.metric("需補脂肪", f"{remain_fat_g:.1f} g/天")
-with m3:
-    st.metric("需補碳水", f"{remain_carb_g:.1f} g/天")
+with st.expander("查看詳細營養缺口"):
+    st.markdown("### 🥩 鮮食需補營養素（扣除乾糧後）")
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("需補蛋白質", f"{remain_prot_g:.1f} g/天")
+    with m2:
+        st.metric("需補脂肪", f"{remain_fat_g:.1f} g/天")
+    with m3:
+        st.metric("需補碳水", f"{remain_carb_g:.1f} g/天")
+
+if st.session_state.step == 2:
+    skip_col, next_col = st.columns(2)
+    with skip_col:
+        if st.button("略過乾糧，直接算鮮食", use_container_width=True):
+            st.session_state.dry_skipped = True
+            st.session_state.step = 3
+            st.rerun()
+    with next_col:
+        if st.button("下一步：選擇鮮食方式 →", type="primary", use_container_width=True):
+            st.session_state.step = 3
+            st.rerun()
+    st.stop()
 
 # =========================================================
 # 6) 鮮食自動配比（NNLS）
 # =========================================================
 st.markdown("---")
-st.subheader("🍖 鮮食自動配比（NNLS：讓宏量缺口最小）")
+st.subheader("3️⃣ 選擇鮮食計算方式")
+fresh_choice = st.selectbox(
+    "你要怎麼選擇鮮食？",
+    ["自動配比", "固定部分食材", "先不計算鮮食"],
+    index=None,
+    placeholder="請選擇鮮食方式",
+    help="自動配比會直接計算食材克數；固定部分食材適合你已知某些食材的每日克數。",
+)
+if fresh_choice is None:
+    st.info("請先選擇一種鮮食計算方式。")
+    st.session_state.fresh_skipped = False
+    st.stop()
+if fresh_choice == "先不計算鮮食":
+    st.info("已略過鮮食計算。上方的每日目標與乾糧結果仍可供查看。")
+    st.session_state.fresh_skipped = True
+    st.stop()
+st.session_state.fresh_skipped = False
 
 fresh_candidates = df[df["類型"].str.contains("生", na=False)]
-selected_fresh = st.multiselect("選擇鮮食食材（可複選）", fresh_candidates["食物名稱"].tolist(), key="fresh_auto")
+if fresh_choice == "自動配比":
+    st.subheader("鮮食方式 A：自動配比")
+    st.caption("適合：你想從幾種候選食材中，直接算出各食材每天建議餵幾克。")
+    selected_fresh = st.multiselect("你打算使用哪些鮮食食材？（可複選）", fresh_candidates["食物名稱"].tolist(), key="fresh_auto", help="請選 2 種以上較容易配出接近目標的比例。")
+else:
+    selected_fresh = []
 
 fresh_grams_map = {}
 fresh_total_prot = fresh_total_fat = fresh_total_carb = 0.0
@@ -300,7 +357,7 @@ fresh_kcal_label_total = 0.0
 fresh_kcal_macro_total = 0.0
 
 if selected_fresh:
-    st.caption("NNLS 會直接用你『需要補的蛋白/脂肪/碳水克數』去解各食材的克數（皆為非負）。")
+    st.caption("系統會依照剩餘的蛋白質、脂肪與碳水需求，計算每種食材的建議克數。結果是估算值，請依獸醫或營養師建議調整。")
 
     b = np.array([remain_prot_g, remain_fat_g, remain_carb_g], dtype=float)
 
@@ -353,19 +410,22 @@ if selected_fresh:
 # =========================================================
 # 7) 固定克數模式（先扣固定，再 NNLS 解剩下要補的）
 # =========================================================
-st.markdown("---")
-st.subheader("🥚 固定克數模式：你輸入手邊克數，其餘用 NNLS 補足")
-
 fixed_candidates = fresh_candidates
-selected_fixed = st.multiselect(
-    "選擇已經有/想固定克數的食材（可複選）",
-    fixed_candidates["食物名稱"].tolist(),
-    key="fixed_sel"
-)
+if fresh_choice == "固定部分食材":
+    st.markdown("---")
+    st.subheader("鮮食方式 B：固定部分食材")
+    st.caption("適合：你已經知道某些食材每天要餵幾克，想讓系統用其他食材補足營養。")
+    selected_fixed = st.multiselect(
+        "選擇要固定每日克數的食材（可複選）",
+        fixed_candidates["食物名稱"].tolist(),
+        key="fixed_sel"
+    )
+else:
+    selected_fixed = []
 
 fixed_input = {}
 if selected_fixed:
-    st.write("### 🥩 輸入手邊固定食材克數（g/天）")
+    st.write("### 🥩 輸入這些食材每天要餵的克數")
     for name in selected_fixed:
         fixed_input[name] = st.number_input(
             f"{name}（g）",
@@ -417,7 +477,7 @@ if selected_fixed:
     total_auto_kcal_macro = 0.0
 
     if auto_items and (remain_prot2 + remain_fat2 + remain_carb2) > 0:
-        st.write("### 🧮 自動補足食材（NNLS）")
+        st.write("### 🧮 系統自動補足食材")
 
         b2 = np.array([remain_prot2, remain_fat2, remain_carb2], dtype=float)
         auto_grams_map, err = nnls_solve_grams(fixed_candidates, auto_items, b2)
